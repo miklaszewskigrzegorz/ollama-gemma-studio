@@ -1,0 +1,7 @@
+# Core
+ollama>=0.4.0
+gradio>=5.0.0
+
+# Utilities
+rich>=13.0.0        # colored terminal output / CLI mode
+pyperclip>=1.8.0    # copy to clipboard
