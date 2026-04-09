@@ -1,0 +1,46 @@
+[
+  {
+    "id": "morning_brief",
+    "name": "Morning Brief",
+    "description": "Daily AI productivity summary — requires Ollama running",
+    "module": "agents.tasks.morning_brief",
+    "schedule": "cron",
+    "hour": 7,
+    "minute": 0,
+    "enabled": false,
+    "last_run": null
+  },
+  {
+    "id": "git_summary",
+    "name": "Git Status Check",
+    "description": "Periodic git status and log snapshot saved to logs/",
+    "module": "agents.tasks.git_summary",
+    "schedule": "interval",
+    "interval_minutes": 120,
+    "enabled": false,
+    "git_dir": ".",
+    "last_run": null
+  },
+  {
+    "id": "nba_daily_stats",
+    "name": "NBA Daily Stats",
+    "description": "Fetch yesterday's NBA scores from ESPN — no API key needed",
+    "module": "agents.tasks.nba_daily_stats",
+    "schedule": "cron",
+    "hour": 9,
+    "minute": 0,
+    "enabled": false,
+    "last_run": null
+  },
+  {
+    "id": "nba_telegram",
+    "name": "NBA Telegram Summary",
+    "description": "Send NBA scores to Telegram — requires TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env",
+    "module": "agents.tasks.nba_telegram",
+    "schedule": "cron",
+    "hour": 8,
+    "minute": 50,
+    "enabled": false,
+    "last_run": null
+  }
+]

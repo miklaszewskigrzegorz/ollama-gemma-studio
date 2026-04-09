@@ -1,4 +1,41 @@
-# Python
+# =============================================================================
+# .gitignore — priv_LLM
+# =============================================================================
+# Convention:
+#   _priv_*/    → manually managed private dirs (docs, research, notes)
+#   .env        → secrets and local config (use .env.example as template)
+#   memory/     → AI memory files (user-specific, auto-generated)
+#   logs/       → app.log + SQLite DB + task output (auto-generated)
+#   schedule.json → task schedule (user-specific config)
+# =============================================================================
+
+# ── Private dirs (prefix convention: _priv_*) ─────────────────────────────────
+_priv_*/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── App runtime (auto-generated, user-specific) ───────────────────────────────
+memory/
+logs/
+schedule.json
+!schedule.example.json
+exports/
+sources_to_impove_local_app/
+
+# ── Test output ───────────────────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Personal logs and research ────────────────────────────────────────────────
+*.txt
+!requirements.txt
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -10,22 +47,17 @@ dist/
 build/
 .eggs/
 
-# App
-exports/
-*.log
-.env
+# ── Ollama model cache ────────────────────────────────────────────────────────
+*.gguf
+*.bin
+models/
 
-# OS
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# IDE
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
-
-# Ollama model cache (never commit)
-*.gguf
-*.bin
-models/

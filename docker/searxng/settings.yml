@@ -1,0 +1,35 @@
+# SearXNG configuration for local LLM Assistant
+# Full reference: https://docs.searxng.org/admin/settings/index.html
+
+use_default_settings: true
+
+server:
+  # Secret key — override via SEARXNG_SECRET_KEY env var in docker-compose
+  secret_key: "local_dev_only_change_in_production"
+  bind_address: "0.0.0.0"
+  port: 8080
+  # Disable public instance features not needed locally
+  public_instance: false
+
+ui:
+  default_locale: "en"
+  query_in_title: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 10.0
+  useragent_suffix: ""
+  pool_connections: 100
+  pool_maxsize: 20
+
+# Enable JSON output format (required for API access from search.py)
+formats:
+  - html
+  - json

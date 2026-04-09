@@ -1,7 +1,19 @@
 # Core
 ollama>=0.4.0
-gradio>=5.0.0
+gradio>=6.0.0
+
+# Environment / secrets
+python-dotenv>=1.0.0   # loads .env file into os.environ
+
+# Web search (free, no API key)
+ddgs>=9.0.0            # pip install ddgs  (formerly duckduckgo-search)
+
+# Background task scheduler (CRON Orchestrator)
+apscheduler>=3.10.0
 
 # Utilities
-rich>=13.0.0        # colored terminal output / CLI mode
-pyperclip>=1.8.0    # copy to clipboard
+rich>=13.0.0           # colored terminal output
+
+# Testing
+pytest>=8.0.0
+pytest-mock>=3.12.0
