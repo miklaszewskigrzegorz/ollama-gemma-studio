@@ -8,6 +8,7 @@ Architecture (OpenClaw-inspired):
   - CRON Orchestrator    : APScheduler background tasks with GUI management
   - Web Search           : SearXNG (Docker) or DuckDuckGo fallback
   - File Reader          : browse + inject project files
+  - Agent Mode           : LLM autonomously reads files, proposes writes with confirmation
 
 Tabs: Chat | Sessions | Memory | Files | Orchestrator
 
@@ -46,6 +47,14 @@ from plugins.base import PluginContext
 from plugins.loader import PluginLoader
 from search import web_search
 from file_tools import list_project_files, read_file_raw, format_for_chat
+
+# Agent mode
+from agent.scope_guard import ScopeGuard
+from agent.tools import ToolExecutor, PendingAction
+from agent.executor import (
+    run_agent,
+    StatusEvent, ToolCallEvent, PendingActionEvent, FinalTokenEvent, ErrorEvent,
+)
 
 # ── Global singletons (initialised once at import time) ────────────────────────
 
@@ -257,6 +266,111 @@ def _orch_status_md() -> str:
     return "\n".join(lines)
 
 
+# ── Agent mode helpers ─────────────────────────────────────────────────────────
+
+def _format_pending_md(pending: list[dict]) -> str:
+    """Build markdown shown in the confirmation panel."""
+    if not pending:
+        return "_No pending actions._"
+    parts = []
+    for i, a in enumerate(pending, 1):
+        icons = {"pending": "PENDING", "applied": "APPLIED", "rejected": "REJECTED"}
+        icon = icons.get(a.get("status", "pending"), "?")
+        parts.append(f"### Action {i} — [{icon}]\n\n{a['display_md']}")
+    return "\n\n---\n\n".join(parts)
+
+
+def _agent_arg_short(arguments: dict) -> str:
+    """One-line argument display for tool call log."""
+    parts = []
+    for k, v in arguments.items():
+        if k == "content":
+            parts.append("content=…")
+        elif isinstance(v, str) and len(v) > 30:
+            parts.append(f"{k}='{v[:30]}…'")
+        else:
+            parts.append(f"{k}={v!r}")
+    return ", ".join(parts)
+
+
+def _bot_respond_agent(
+    history: list,
+    model: str,
+    preset: str,
+    temp: float,
+    ctx: int,
+    workspace_root: str,
+    project: str,
+    current_pending: list,
+    extra_context: str,
+):
+    """
+    Generator — handles one chat turn in Agent Mode.
+    Yields 4-tuples: (history, status_text, pending_list, pending_panel_update)
+    """
+    import dataclasses
+
+    user_msg = _msg_content(history[-1])
+    guard = ScopeGuard(workspace_root)
+    executor = ToolExecutor(guard)
+
+    agent_instruction = (
+        "\n\n---\n\n[AGENT MODE]\n"
+        "You have access to file system tools. "
+        "Use read_file / list_directory / search_files / grep_code to explore the workspace "
+        "BEFORE answering — do not guess at file contents. "
+        "Use write_file or run_command to propose changes; the user will confirm before anything "
+        "is written or executed.\n"
+        f"Workspace: {workspace_root}"
+    )
+    system_prompt = build_system_prompt(preset, project, extra_context) + agent_instruction
+    messages = build_ollama_messages(history[:-1], system_prompt)
+    messages.append({"role": "user", "content": user_msg})
+
+    # Start with an empty assistant bubble
+    history = list(history) + [ChatMessage(role="assistant", content="")]
+    partial = ""
+    new_pending = list(current_pending)
+
+    for event in run_agent(messages, model, executor, temp, ctx):
+
+        if isinstance(event, StatusEvent):
+            yield history, event.text, new_pending, gr.update()
+
+        elif isinstance(event, ToolCallEvent):
+            # Render tool result as a Gradio "thought" bubble
+            tool_bubble = ChatMessage(
+                role="assistant",
+                content=f"```\n{event.result_preview}\n```",
+                metadata={
+                    "title": f"Tool: {event.tool_name}({event.arg_preview})",
+                    "status": "done",
+                },
+            )
+            history = history[:-1] + [tool_bubble, ChatMessage(role="assistant", content=partial)]
+            yield history, f"Tool: {event.tool_name}", new_pending, gr.update()
+
+        elif isinstance(event, PendingActionEvent):
+            new_pending = new_pending + [event.action.to_dict()]
+            panel_md = _format_pending_md(new_pending)
+            yield history, "Pending action — confirm below", new_pending, gr.update(visible=True)
+
+        elif isinstance(event, FinalTokenEvent):
+            partial += event.token
+            history[-1] = ChatMessage(role="assistant", content=partial)
+            yield history, "Responding…", new_pending, gr.update()
+
+        elif isinstance(event, ErrorEvent):
+            history[-1] = ChatMessage(
+                role="assistant",
+                content=f"**Agent error:** {event.message}",
+            )
+            yield history, f"Error: {event.message}", new_pending, gr.update()
+            return
+
+    log.info(f"Agent done: {len(partial)} chars, {len(new_pending)} pending")
+
+
 def _task_id_from_choice(choice: str) -> str | None:
     """Resolve a display label back to a task ID via index matching."""
     choices = _orch_task_choices()
@@ -287,6 +401,10 @@ def build_ui() -> gr.Blocks:
         active_project = gr.State(default_project)
         session_id_state = gr.State(session_manager.new_id())
         _save_sink = gr.State("")  # silent auto-save output
+        # Agent mode state
+        agent_mode_state = gr.State(False)
+        workspace_root_state = gr.State("")
+        pending_actions_state = gr.State([])
 
         # ══════════════════════════════════════════════════════════════════════
         with gr.Tabs() as main_tabs:
@@ -317,6 +435,28 @@ def build_ui() -> gr.Blocks:
                                 info="Lower = faster on CPU",
                             )
 
+                        with gr.Accordion("Agent / Coding Mode", open=False):
+                            agent_toggle = gr.Checkbox(
+                                label="Enable Agent Mode",
+                                value=False,
+                                info="LLM reads files autonomously, proposes writes with confirmation",
+                            )
+                            workspace_input = gr.Textbox(
+                                label="Workspace root directory",
+                                placeholder="C:/my/project  or  /home/user/repo",
+                                lines=1,
+                            )
+                            workspace_status = gr.Textbox(
+                                label="", interactive=False, lines=1,
+                                placeholder="Set workspace path to enable agent",
+                            )
+                            gr.Markdown(
+                                "**Auto tools** (no confirmation needed):\n"
+                                "`read_file` · `list_directory` · `search_files` · `grep_code`\n\n"
+                                "**Write tools** (confirmation required):\n"
+                                "`write_file` · `run_command`"
+                            )
+
                         with gr.Accordion("Project Memory", open=True):
                             project_dd = gr.Dropdown(
                                 choices=projects, value=default_project,
@@ -344,9 +484,26 @@ def build_ui() -> gr.Blocks:
                     # ── Chat area ──────────────────────────────────────────
                     with gr.Column(scale=4):
                         chatbot = gr.Chatbot(
-                            height=470, label="",
+                            height=420, label="",
                             render_markdown=True, layout="bubble",
                         )
+
+                        # Pending actions confirmation panel (hidden by default)
+                        with gr.Group(visible=False) as pending_panel:
+                            gr.Markdown("### Pending Changes — Review & Confirm")
+                            pending_display = gr.Markdown(value="_No pending actions._")
+                            with gr.Row():
+                                apply_all_btn = gr.Button(
+                                    "Apply All Changes", variant="primary", size="sm", scale=3,
+                                )
+                                reject_all_btn = gr.Button(
+                                    "Reject All", variant="stop", size="sm", scale=1,
+                                )
+                            pending_result = gr.Textbox(
+                                label="", interactive=False, lines=1,
+                                placeholder="Result of apply/reject…",
+                            )
+
                         with gr.Row():
                             search_toggle = gr.Checkbox(
                                 label="Search web",
@@ -624,11 +781,12 @@ def build_ui() -> gr.Blocks:
         def bot_respond(
             history: list, model: str, preset: str, temp: float, ctx: int,
             search_on: bool, project: str, session_id: str,
+            agent_mode: bool, workspace_root: str, pending_actions: list,
         ):
             user_msg = _msg_content(history[-1])
-            log.info(f"User [{project}/{preset}]: {user_msg[:80]}")
+            log.info(f"User [{project}/{preset}] agent={agent_mode}: {user_msg[:80]}")
 
-            # ── Plugin command interception ────────────────────────────────
+            # ── Plugin command interception (always, even in agent mode) ───────
             if plugin_loader.is_command(user_msg):
                 plug_ctx = PluginContext(
                     project=project, preset=preset, model=model,
@@ -639,19 +797,26 @@ def build_ui() -> gr.Blocks:
                 log.info(f"Plugin: {user_msg.split()[0]} → direct={is_direct}")
                 if is_direct:
                     history = list(history) + [ChatMessage(role="assistant", content=result)]
-                    yield history, f"Plugin: {user_msg.split()[0]}"
+                    yield history, f"Plugin: {user_msg.split()[0]}", pending_actions, gr.update()
                     return
-                # Not direct → result becomes extra context for LLM below
                 extra_context = result
             else:
                 extra_context = ""
 
-            # ── Web search ─────────────────────────────────────────────────
+            # ── Agent mode ─────────────────────────────────────────────────────
+            if agent_mode and workspace_root.strip():
+                yield from _bot_respond_agent(
+                    history, model, preset, temp, ctx,
+                    workspace_root, project, pending_actions, extra_context,
+                )
+                return
+
+            # ── Normal chat mode (unchanged) ───────────────────────────────────
             search_results = extra_context
             search_label = ""
             if search_on and not extra_context:
                 search_label = f"Searching: {user_msg[:50]}…"
-                yield list(history), search_label
+                yield list(history), search_label, pending_actions, gr.update()
                 search_results = web_search(user_msg)
                 hits = search_results.count("---") + 1 if "---" in search_results else 0
                 search_label = f"Found {hits} results for: {user_msg[:40]}"
@@ -672,18 +837,18 @@ def build_ui() -> gr.Blocks:
                     token = chunk.message.content or ""
                     partial += token
                     history[-1] = ChatMessage(role="assistant", content=partial)
-                    yield history, search_label
+                    yield history, search_label, pending_actions, gr.update()
                 log.info(f"Response: {len(partial)} chars")
             except ollama.ResponseError as e:
                 history[-1] = ChatMessage(
                     role="assistant",
                     content=f"**Ollama error:** {e.error}\n\n`ollama pull {model}`",
                 )
-                yield history, search_label
+                yield history, search_label, pending_actions, gr.update()
             except Exception as e:
                 log.error(f"bot_respond error: {e}")
                 history[-1] = ChatMessage(role="assistant", content=f"**Error:** {e}")
-                yield history, search_label
+                yield history, search_label, pending_actions, gr.update()
 
         def auto_save_session(
             history: list, session_id: str, project: str, preset: str, model: str
@@ -712,11 +877,6 @@ def build_ui() -> gr.Blocks:
             content = f"**Q:** {last_q}\n\n**A:** {last_a}"
             path = memory_manager.save_note(project, title, content)
             return f"Saved: {path}"
-
-        def on_clear_new_session():
-            """Clear chat and generate new session ID."""
-            new_sid = session_manager.new_id()
-            return [], "", new_sid, f"New session: {new_sid}"
 
         def on_project_change(project: str):
             ctx = memory_manager.get_project_context(project)
@@ -849,17 +1009,104 @@ def build_ui() -> gr.Blocks:
             )
             return list(history) + [msg], f"Injected: {filename}"
 
+        # ── Agent mode handlers ────────────────────────────────────────────────
+
+        def on_workspace_change(workspace: str):
+            ws = workspace.strip()
+            if not ws:
+                return "", "No workspace set"
+            p = Path(ws)
+            if not p.exists():
+                return "", f"Path not found: {ws}"
+            if not p.is_dir():
+                return "", f"Not a directory: {ws}"
+            resolved = str(p.resolve())
+            return resolved, f"Workspace ready: {resolved}"
+
+        def on_agent_toggle(enabled: bool, workspace_root: str):
+            if enabled and not workspace_root.strip():
+                return False, "Set workspace directory first"
+            return enabled, ("Agent Mode ON" if enabled else "Agent Mode OFF")
+
+        def on_apply_all(pending_actions: list, workspace_root: str):
+            if not workspace_root.strip():
+                return pending_actions, _format_pending_md(pending_actions), "ERROR: no workspace", gr.update()
+            guard = ScopeGuard(workspace_root)
+            executor = ToolExecutor(guard)
+            updated = []
+            results = []
+            for a in pending_actions:
+                if a.get("status") != "pending":
+                    updated.append(a)
+                    continue
+                action = PendingAction.from_dict(a)
+                result = executor.apply_pending(action)
+                updated_a = dict(a, status="applied")
+                updated.append(updated_a)
+                results.append(f"`{a['tool_name']}`: {result}")
+            result_text = "\n".join(results) if results else "Nothing applied."
+            all_resolved = all(a.get("status") != "pending" for a in updated)
+            return (
+                updated,
+                _format_pending_md(updated),
+                result_text,
+                gr.update(visible=not all_resolved),
+            )
+
+        def on_reject_all(pending_actions: list):
+            updated = [dict(a, status="rejected") for a in pending_actions]
+            result_text = f"Rejected {len(updated)} action(s)."
+            return (
+                updated,
+                _format_pending_md(updated),
+                result_text,
+                gr.update(visible=False),
+            )
+
+        def on_clear_with_pending():
+            new_sid = session_manager.new_id()
+            return [], "", new_sid, f"New session: {new_sid}", [], gr.update(visible=False)
+
         # ── Wire events ────────────────────────────────────────────────────────
 
-        # Chat: submit → stream → auto-save
+        # Workspace + agent toggle
+        workspace_input.change(
+            on_workspace_change,
+            [workspace_input],
+            [workspace_root_state, workspace_status],
+        )
+        agent_toggle.change(
+            on_agent_toggle,
+            [agent_toggle, workspace_root_state],
+            [agent_mode_state, workspace_status],
+        )
+
+        # Pending panel buttons
+        apply_all_btn.click(
+            on_apply_all,
+            [pending_actions_state, workspace_root_state],
+            [pending_actions_state, pending_display, pending_result, pending_panel],
+        )
+        reject_all_btn.click(
+            on_reject_all,
+            [pending_actions_state],
+            [pending_actions_state, pending_display, pending_result, pending_panel],
+        )
+
+        # Chat: submit → stream → auto-save → refresh pending display
         for trigger in [msg_box.submit, submit_btn.click]:
             trigger(
                 user_submit, [msg_box, chatbot], [msg_box, chatbot], queue=False
             ).then(
                 bot_respond,
                 [chatbot, model_dd, preset_dd, temperature, max_ctx,
-                 search_toggle, active_project, session_id_state],
-                [chatbot, search_status],
+                 search_toggle, active_project, session_id_state,
+                 agent_mode_state, workspace_root_state, pending_actions_state],
+                [chatbot, search_status, pending_actions_state, pending_panel],
+            ).then(
+                lambda pa: _format_pending_md(pa),
+                [pending_actions_state],
+                [pending_display],
             ).then(
                 auto_save_session,
                 [chatbot, session_id_state, active_project, preset_dd, model_dd],
@@ -867,8 +1114,9 @@ def build_ui() -> gr.Blocks:
             )
 
         clear_btn.click(
-            on_clear_new_session,
-            outputs=[chatbot, msg_box, session_id_state, session_label],
+            on_clear_with_pending,
+            outputs=[chatbot, msg_box, session_id_state, session_label,
+                     pending_actions_state, pending_panel],
         )
         save_mem_btn.click(
             save_last_to_memory, [chatbot, active_project], export_status
