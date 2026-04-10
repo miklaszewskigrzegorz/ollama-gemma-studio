@@ -7,7 +7,7 @@ Priority:
 
 To enable SearXNG:
     docker compose -f docker-compose.searxng.yml up -d
-    # add to .env: SEARXNG_URL=http://localhost:8888
+    # add to .env: SEARXNG_URL=http://localhost:8889
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](#contributing)
 [![Ollama](https://img.shields.io/badge/powered%20by-Ollama-black?logo=ollama)](https://ollama.com)
 
 Everything runs on your machine. Your conversations, your code, your data — never leave your hardware.
@@ -33,14 +33,18 @@ Everything runs on your machine. Your conversations, your code, your data — ne
 
 ## Hardware Requirements
 
-| Setup | RAM | GPU | Speed |
-|---|---|---|---|
-| CPU only | 8 GB | none | 2–5 tok/s, response ~30–120s |
-| Recommended | 16 GB | 6 GB VRAM | 15–40 tok/s, response ~5–15s |
-| Optimal | 32 GB | RTX 3080 / 4090 | 40–80 tok/s, response ~2–5s |
+| Setup | RAM | GPU | Speed | Response time* |
+|---|---|---|---|---|
+| CPU only (budget) | 8 GB | none | ~5–8 tok/s | 60–300s |
+| CPU only (tested) | 32 GB DDR4 | none | ~10–11 tok/s | 30–180s |
+| With GPU | 16 GB | 6 GB VRAM | 15–40 tok/s | 5–20s |
+| High-end GPU | 32 GB | RTX 3080+ | 40–80 tok/s | 2–8s |
 
-> **Tested on:** Windows 11 (RTX 3060, 32 GB RAM), Ubuntu 22.04 (CPU-only, 16 GB RAM), macOS M2 (Metal acceleration).  
-> **Minimum:** 8 GB RAM, Python 3.11+, Ollama installed. GPU is optional but strongly recommended.
+\* Response time varies with output length (~100 tok = ~10s, ~500 tok = ~50s at 10 tok/s).
+
+> **Tested on:** Windows 11, Intel Core i5-11300H @ 3.10 GHz (4C/8T), 32 GB DDR4-3200, **CPU-only** (no GPU).  
+> Benchmarked with `gemma4:e2b` — ~10–11 tok/s, ~640 tok/min across all context window sizes (2048–8192).  
+> **Minimum:** 8 GB RAM, Python 3.11+, Ollama installed. GPU is optional but significantly improves speed.
 
 ---
 
@@ -408,13 +412,12 @@ ollama-gemma-studio/
 │   ├── test_plugins.py
 │   └── test_orchestrator.py
 │
-├── memory/                     Per-project memory files (.md)
-├── logs/                       app.log + app.db (SQLite)
-├── exports/                    Exported chat sessions
-├── schedule.json               Orchestrator task config (auto-created)
-│
-├── SOUL.md                     Bootstrap personality / system instructions
-├── AGENTS.md                   Agent mode definitions
+├── memory/                     Per-project memory files (.md) — gitignored, auto-created on first run
+│   ├── SOUL.md                 Bootstrap personality / system instructions (editable in UI)
+│   └── AGENTS.md               Always/never rules (editable in UI)
+├── logs/                       app.log + app.db (SQLite) — gitignored
+├── exports/                    Exported chat sessions — gitignored
+├── schedule.json               Orchestrator task config — gitignored, auto-created on first run
 │
 ├── start.sh                    Quick launcher — Linux / macOS
 ├── start.bat                   Quick launcher — Windows
